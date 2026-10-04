@@ -12,6 +12,11 @@
 #   yk panic         yk list [filter]   yk code NAME
 set -uo pipefail
 
+# Some launchers (Deckboard) run commands with no HOME or PATH at all.
+: "${HOME:=$(getent passwd "$(id -u)" | cut -d: -f6)}"
+: "${PATH:=/usr/local/bin:/usr/bin:/bin}"
+export HOME PATH
+
 SELF=$(readlink -f "${BASH_SOURCE[0]}")
 FALLBACK="$(dirname "$SELF")/yk-ydotool"
 API="${PC_API_URL:-http://127.0.0.1:8782}"

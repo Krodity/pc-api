@@ -10,6 +10,7 @@
   pcctl media [list]               players + what's playing
   pcctl play|pause|toggle|next|prev|stop [PLAYER]
   pcctl seek +10|-10|=90 [PLAYER]
+  pcctl pvol [+5|-5|40] [PLAYER]   a player's own volume (not the system mixer)
   pcctl vol [+5|-5|40] [--mic]     show or change default output (or mic) volume
   pcctl mute [on|off] [--mic]      toggle or set mute
   pcctl audio                      list outputs/inputs  ·  pcctl default NAME [--mic]
@@ -137,6 +138,16 @@ def main(argv):
             body['offset'] = float(v)
         call('POST', '/api/media/seek', body)
 
+    elif cmd == 'pvol':
+        body = {}
+        if args and not args[0].rstrip('%').lstrip('+-').isdigit():
+            args.insert(0, '')                  # just a player: show its volume
+        if len(args) > 1:
+            body['player'] = args[1]
+        if args and args[0]:
+            v = args[0].rstrip('%')
+            body['delta' if v[0] in '+-' else 'set'] = int(v)
+        print(call('POST', '/api/media/volume', body)['volume'])
     elif cmd in ('vol', 'volume'):
         if args:
             v = args[0].rstrip('%')

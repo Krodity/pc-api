@@ -215,6 +215,20 @@ def media_seek(player=None, offset=None, position=None):
     return 'ok'
 
 
+def media_volume(player=None, set_pct=None, delta=None):
+    """A player's own volume (MPRIS, 0-100 %), not the system mixer."""
+    base = ['playerctl'] + (['-p', player] if player else [])
+    if set_pct is not None:
+        _run(base + ['volume', str(max(0, min(int(set_pct), 100)) / 100)])
+    elif delta is not None:
+        d = int(delta)
+        _run(base + ['volume', f'{abs(d) / 100}{"+" if d >= 0 else "-"}'])
+    try:
+        return round(float(_run(base + ['volume']).strip()) * 100)
+    except ValueError:
+        return None
+
+
 # ── audio (PipeWire via pactl) ───────────────────────────────────────────────
 def _pactl_json(*args):
     return json.loads(_run(['pactl', '-f', 'json', *args]) or 'null')

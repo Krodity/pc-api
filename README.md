@@ -135,7 +135,8 @@ Hyprland doesn't leave the service talking to a dead socket.
 ### Media (playerctl / MPRIS)
 
 `GET /api/media` · `POST /api/media/{play,pause,play-pause,stop,next,previous}` `{player?}` ·
-`POST /api/media/seek` `{player?, offset? | position?}` (seconds)
+`POST /api/media/seek` `{player?, offset? | position?}` (seconds) ·
+`POST /api/media/volume` `{player?, set? | delta?}` (the player's own volume, 0-100)
 
 ### Audio (pactl)
 
@@ -174,7 +175,7 @@ API without changes.
 
 ```
 pcctl ws 3 · pcctl launch chromium · pcctl close · pcctl move 5 · pcctl windows
-pcctl media · pcctl toggle [player] · pcctl next · pcctl seek +10
+pcctl media · pcctl toggle [player] · pcctl next · pcctl seek +10 · pcctl pvol -5 chromium
 pcctl vol · pcctl vol +5 · pcctl vol 40 --mic · pcctl mute · pcctl audio
 pcctl notify "Title" "body" · pcctl shot DP-2 -o shot.png · pcctl health
 ```

@@ -118,6 +118,9 @@ class App:
             ('POST', '/api/media/seek'):
                 lambda b, q: D.media_seek(b.get('player'), b.get('offset'),
                                           b.get('position')),
+            ('POST', '/api/media/volume'):
+                lambda b, q: {'volume': D.media_volume(
+                    b.get('player'), b.get('set'), b.get('delta'))},
             # audio
             ('GET', '/api/audio'): lambda b, q: D.audio_state(),
             ('POST', '/api/audio/volume'):
