@@ -195,7 +195,7 @@ class App:
         return self.dev.holds()
 
     def type_text(self, body, q):
-        text = str(_need(body, 'text'))
+        text = str(body.get('text') or '')
         if len(text) > 20000:
             raise HTTPError(413, 'text too long (20000 chars max)')
         skipped = self.dev.type_text(text,

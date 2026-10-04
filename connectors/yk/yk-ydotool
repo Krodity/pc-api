@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# yk — human-readable front end for ydotool (keys, text, mouse).
+# Needs ydotool.service (user) on the default socket; yk starts it if it's down.
+# Full guide: ~/Documents/yk-guide.md
+#
+#   yk ctrl+shift+t              combo (press all, release in reverse)
+#   yk -d 40 ctrl+a ctrl+c       several combos, 40 ms between key events
+#   yk hold shift / yk release shift
+#   yk type 'text'   yk click [left|right|middle|back|forward] [N]
+#   yk move X Y      yk moveto X Y      yk scroll [V] [H]
+#   yk panic         yk list [filter]   yk code NAME
+set -euo pipefail
+
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+export YDOTOOL_SOCKET="${YDOTOOL_SOCKET:-$XDG_RUNTIME_DIR/.ydotool_socket}"
+HDR=/usr/include/linux/input-event-codes.h
+
+# Short names / aliases. Anything not here is looked up in the kernel header:
+# KEY_FOO -> "foo", BTN_FOO -> "btn_foo" (so every code has a name).
+declare -A K=(
+ [esc]=1 [escape]=1 [minus]=12 [-]=12 [equal]=13 [=]=13 [backspace]=14 [bs]=14 [tab]=15
+ [lbracket]=26 [rbracket]=27 [enter]=28 [return]=28
+ [ctrl]=29 [lctrl]=29 [control]=29 [semicolon]=39 [apostrophe]=40 [quote]=40
+ [grave]=41 [backtick]=41 [shift]=42 [lshift]=42 [backslash]=43
+ [comma]=51 [,]=51 [dot]=52 [period]=52 [.]=52 [slash]=53 [/]=53 [rshift]=54
+ [alt]=56 [lalt]=56 [space]=57 [capslock]=58 [caps]=58
+ [rctrl]=97 [print]=99 [prtsc]=99 [printscreen]=99 [ralt]=100 [altgr]=100
+ [pgup]=104 [pageup]=104 [pgdn]=109 [pagedown]=109 [ins]=110 [del]=111
+ [super]=125 [meta]=125 [win]=125 [lsuper]=125 [lmeta]=125 [rsuper]=126 [rmeta]=126
+ [voldown]=114 [volup]=115 [next]=163 [prev]=165 [play]=164 [stop]=166
+ [brightdown]=224 [brightup]=225 [iso]=86 [scrolllock]=70 [numlock]=69
+)
+
+code_of() {                    # name or number -> numeric code
+  local n=${1,,}
+  if [[ $n =~ ^[0-9]+$ ]]; then echo "$n"; return; fi
+  if [[ $n =~ ^0x[0-9a-f]+$ ]]; then echo $((n)); return; fi
+  if [[ -n ${K[$n]:-} ]]; then echo "${K[$n]}"; return; fi
+  local sym=${n^^}; [[ $sym == BTN_* ]] || sym="KEY_$sym"
+  local v; v=$(awk -v s="$sym" '$1=="#define" && $2==s {print $3; exit}' "$HDR")
+  [[ $v =~ ^(0x[0-9a-fA-F]+|[0-9]+)$ ]] || { echo "yk: unknown key '$1' (try: yk list $1)" >&2; exit 1; }
+  echo $((v))
+}
+
+ensure_daemon() {
+  [[ -S $YDOTOOL_SOCKET ]] && systemctl --user -q is-active ydotool.service 2>/dev/null && return
+  systemctl --user start ydotool.service 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [[ -S $YDOTOOL_SOCKET ]] && { sleep 0.05; return; }; sleep 0.1; done
+  echo "yk: ydotool.service not running and could not be started" >&2; exit 1
+}
+
+button() {                     # name -> index for ydotool click
+  case ${1,,} in
+    left|l|1) echo 0 ;; right|r|2) echo 1 ;; middle|m|3) echo 2 ;;
+    back|side|4) echo 3 ;; forward|extra|5) echo 4 ;;
+    *) echo "yk: unknown button '$1'" >&2; exit 1 ;;
+  esac
+}
+
+usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+delay=()
+if [[ ${1:-} == -d ]]; then delay=(-d "$2"); shift 2; fi
+[[ $# -eq 0 ]] && usage 1
+
+case $1 in
+  -h|--help|help) usage ;;
+  list)
+    shift; f=${1:-}
+    grep -E '^#define (KEY|BTN)_[A-Z0-9_]+[[:space:]]+(0x[0-9a-fA-F]+|[0-9]+)' "$HDR" \
+      | awk '{n=$2; sub(/^KEY_/,"",n); printf "%d\t%s\n", strtonum($3), tolower(n)}' \
+      | sort -n | { [[ -n $f ]] && grep -i -- "$f" || cat; } | column -t
+    exit ;;
+  code) shift; for n in "$@"; do c=$(code_of "$n") || exit 1; echo "$n $c"; done; exit ;;
+esac
+
+ensure_daemon
+
+case $1 in
+  type)   shift; exec ydotool type "${delay[@]}" -- "$@" ;;
+  hold|release)
+    st=1; [[ $1 == release ]] && st=0; shift
+    ev=(); for combo in "$@"; do IFS='+' read -ra ks <<< "$combo"
+      for k in "${ks[@]}"; do ev+=("$(code_of "$k"):$st"); done; done
+    exec ydotool key "${delay[@]}" "${ev[@]}" ;;
+  click|dclick|mdown|mup)
+    cmd=$1; b=$(button "${2:-left}"); n=${3:-1}
+    case $cmd in
+      click)  exec ydotool click -r "$n" -D 60 "$(printf '0x%X' $((0xC0 + b)))" ;;
+      dclick) exec ydotool click -r 2 -D 60 "$(printf '0x%X' $((0xC0 + b)))" ;;
+      mdown)  exec ydotool click "$(printf '0x%X' $((0x40 + b)))" ;;
+      mup)    exec ydotool click "$(printf '0x%X' $((0x80 + b)))" ;;
+    esac ;;
+  move)   exec ydotool mousemove -- "${2:?X}" "${3:?Y}" ;;
+  moveto) exec ydotool mousemove -a -- "${2:?X}" "${3:?Y}" ;;
+  scroll) exec ydotool mousemove -w -- "${3:-0}" "${2:--1}" ;;
+  panic)  exec ydotool key 29:0 97:0 42:0 54:0 56:0 100:0 125:0 126:0 272:0 273:0 274:0 ;;
+esac
+
+# default: one or more combos
+for combo in "$@"; do
+  IFS='+' read -ra ks <<< "$combo"
+  down=(); up=()
+  for k in "${ks[@]}"; do c=$(code_of "$k"); down+=("$c:1"); up=("$c:0" "${up[@]}"); done
+  ydotool key "${delay[@]}" "${down[@]}" "${up[@]}"
+done

@@ -1,0 +1,9 @@
+[Unit]
+Description=Alert: pc-api has stopped and won't be restarted
+
+[Service]
+Type=oneshot
+# Optional. Put NTFY_URL=https://ntfy.example/topic in ~/.config/pc-api/alert.env
+# to get a push when pc-api goes down for good; without it this does nothing.
+EnvironmentFile=-%h/.config/pc-api/alert.env
+ExecStart=/bin/sh -c '[ -n "$NTFY_URL" ] || exit 0; exec curl -s -m 10 -H "Title: pc-api is down" -H "Priority: high" -H "Tags: warning" -d "pc-api.service failed and systemd gave up restarting it. yk falls back to ydotool; everything else that calls the API is down. journalctl --user -u pc-api" "$NTFY_URL"'

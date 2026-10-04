@@ -149,11 +149,55 @@ Hyprland doesn't leave the service talking to a dead socket.
 `GET /api/system/screenshot?output=DP-2` (PNG; no output = all monitors) ·
 `GET /api/info` (version, uptime, current holds, route list) · `GET /api/health`
 
+## Connectors
+
+`install.sh` links both of these into `~/.local/bin`.
+
+### `yk`: key input (drop-in for the ydotool version)
+
+Same commands as before (`yk ctrl+shift+t`, `yk -d 40 ctrl+a ctrl+c`,
+`yk hold`/`release`, `yk type`, `yk click`/`dclick`/`mdown`/`mup`, `yk move`,
+`yk moveto`, `yk scroll`, `yk panic`, `yk list`, `yk code`), so anything that
+already calls `yk` (phone remotes over SSH, macros, scripts) goes through the
+API without changes.
+
+- **Holds expire.** `yk hold` holds for `$YK_HOLD_TTL` seconds (default 120)
+  under the client name `$YK_CLIENT` (default `yk`). A remote that never sends
+  the release can't leave a key down for good.
+- **Fallback.** If the API can't be reached, or there's no token, `yk` execs
+  `yk-ydotool` (the original ydotool version, next to it). It only falls back
+  when the request never connected, so an action the API already did is never
+  repeated. `YK_BACKEND=ydotool` forces the old path.
+- Bash + curl + jq, about 25 ms a call.
+
+### `pcctl`: everything except key input
+
+```
+pcctl ws 3 · pcctl launch chromium · pcctl close · pcctl move 5 · pcctl windows
+pcctl media · pcctl toggle [player] · pcctl next · pcctl seek +10
+pcctl vol · pcctl vol +5 · pcctl vol 40 --mic · pcctl mute · pcctl audio
+pcctl notify "Title" "body" · pcctl shot DP-2 -o shot.png · pcctl health
+```
+
+`pcctl --help` lists everything. It re-resolves the live Hyprland instance on
+every call, so it replaces button commands like
+`HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/) hyprctl dispatch …`,
+which break when more than one instance directory exists.
+
+Non-interactive SSH sessions often don't have `~/.local/bin` on `PATH`; link
+the commands into `/usr/local/bin` if a remote can't find them.
+
+## Down alert
+
+`pc-api-failed.service` runs when systemd gives up restarting pc-api. It does
+nothing unless `~/.config/pc-api/alert.env` sets `NTFY_URL=...`, in which case
+it posts a high-priority ntfy message there.
+
 ## Not here yet
 
 - **Lock screen**: there's no reliable cross-shell lock IPC yet.
-- **Client connectors**: wrappers so existing tools (a ydotool-style CLI,
-  phone remotes, stream decks, n8n) call this API.
+- **More connectors**: phone remotes that keep their own backend today,
+  stream decks, n8n.
 - Window close/move/fullscreen haven't been live-tested. Focus, workspace
   state, dispatch errors and `moveto` have.
 

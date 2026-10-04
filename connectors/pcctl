@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""pcctl — command-line client for pc-api (everything except key input; use yk).
+
+  pcctl ws 3                       focus workspace
+  pcctl launch chromium            start a program (Hyprland exec, honours [workspace N])
+  pcctl close [ADDR]               close focused (or given) window
+  pcctl move WS [ADDR]             send focused (or given) window to a workspace
+  pcctl focus ADDR | fullscreen [ADDR] | dispatch 'hl.dsp....'
+  pcctl windows [--json]           list windows   ·  pcctl state  (everything, JSON)
+  pcctl media [list]               players + what's playing
+  pcctl play|pause|toggle|next|prev|stop [PLAYER]
+  pcctl seek +10|-10|=90 [PLAYER]
+  pcctl vol [+5|-5|40] [--mic]     show or change default output (or mic) volume
+  pcctl mute [on|off] [--mic]      toggle or set mute
+  pcctl audio                      list outputs/inputs  ·  pcctl default NAME [--mic]
+  pcctl notify TITLE [BODY]
+  pcctl shot [OUTPUT] [-o FILE]    PNG screenshot (default ./screenshot-<time>.png)
+  pcctl health | info
+
+Env: PC_API_URL (default http://127.0.0.1:8782), token from ~/.config/pc-api/token.
+"""
+import json
+import os
+import pathlib
+import sys
+import time
+import urllib.error
+import urllib.request
+
+API = os.environ.get('PC_API_URL', 'http://127.0.0.1:8782').rstrip('/')
+TOKEN_FILE = pathlib.Path(os.environ.get('XDG_CONFIG_HOME',
+                                         pathlib.Path.home() / '.config')) / 'pc-api' / 'token'
+
+
+def die(msg, code=1):
+    print(f'pcctl: {msg}', file=sys.stderr)
+    sys.exit(code)
+
+
+def call(method, path, body=None, raw=False):
+    try:
+        token = TOKEN_FILE.read_text().strip()
+    except OSError:
+        die(f'no token at {TOKEN_FILE}')
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(API + path, data=data, method=method, headers={
+        'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            payload = r.read()
+    except urllib.error.HTTPError as e:
+        try:
+            die(json.loads(e.read()).get('error', e.reason))
+        except ValueError:
+            die(f'HTTP {e.code}')
+    except urllib.error.URLError as e:
+        die(f'pc-api unreachable at {API} ({e.reason})')
+    return payload if raw else json.loads(payload).get('result')
+
+
+def flag(args, name):
+    if name in args:
+        args.remove(name)
+        return True
+    return False
+
+
+def fmt_time(s):
+    if s is None:
+        return '--:--'
+    s = int(s)
+    return f'{s // 60}:{s % 60:02d}'
+
+
+def main(argv):
+    if not argv or argv[0] in ('-h', '--help', 'help'):
+        print(__doc__.strip())
+        return
+    cmd, args = argv[0], argv[1:]
+    mic = flag(args, '--mic')
+    as_json = flag(args, '--json')
+    kind = 'source' if mic else 'sink'
+
+    if cmd in ('ws', 'workspace'):
+        call('POST', '/api/hypr/workspace', {'workspace': args[0]})
+    elif cmd == 'launch':
+        if not args:
+            die('launch what?')
+        call('POST', '/api/hypr/launch', {'cmd': ' '.join(args)})
+    elif cmd == 'close':
+        call('POST', '/api/hypr/close', {'address': args[0]} if args else {})
+    elif cmd == 'move':
+        body = {'workspace': args[0]}
+        if len(args) > 1:
+            body['address'] = args[1]
+        call('POST', '/api/hypr/move', body)
+    elif cmd == 'focus':
+        call('POST', '/api/hypr/focus', {'address': args[0]})
+    elif cmd == 'fullscreen':
+        call('POST', '/api/hypr/fullscreen', {'address': args[0]} if args else {})
+    elif cmd == 'dispatch':
+        call('POST', '/api/hypr/dispatch', {'lua': ' '.join(args)})
+    elif cmd == 'state':
+        print(json.dumps(call('GET', '/api/hypr/state'), indent=2))
+    elif cmd == 'windows':
+        st = call('GET', '/api/hypr/state')
+        if as_json:
+            print(json.dumps(st['windows'], indent=2))
+            return
+        for w in sorted(st['windows'], key=lambda w: str(w['workspace'])):
+            mark = '*' if w['address'] == st['active'] else ' '
+            print(f"{mark} {w['address']:<16} ws {str(w['workspace']):<4} "
+                  f"{(w['class'] or '')[:20]:<20} {(w['title'] or '')[:60]}")
+
+    elif cmd == 'media' and (not args or args[0] == 'list'):
+        players = call('GET', '/api/media')
+        if as_json:
+            print(json.dumps(players, indent=2))
+            return
+        if not players:
+            print('nothing playing')
+        for p in players:
+            who = ' – '.join(x for x in (p['artist'], p['title']) if x)
+            print(f"{p['player']:<28} {p['status']:<8} "
+                  f"{fmt_time(p['position'])}/{fmt_time(p['length'])}  {who}")
+    elif cmd in ('play', 'pause', 'toggle', 'play-pause', 'next', 'prev',
+                 'previous', 'stop'):
+        action = {'toggle': 'play-pause', 'prev': 'previous'}.get(cmd, cmd)
+        call('POST', f'/api/media/{action}', {'player': args[0]} if args else {})
+    elif cmd == 'seek':
+        if not args:
+            die('seek +N, -N or =N')
+        v, body = args[0], ({'player': args[1]} if len(args) > 1 else {})
+        if v.startswith('='):
+            body['position'] = float(v[1:])
+        else:
+            body['offset'] = float(v)
+        call('POST', '/api/media/seek', body)
+
+    elif cmd in ('vol', 'volume'):
+        if args:
+            v = args[0].rstrip('%')
+            body = {'kind': kind}
+            body['delta' if v[0] in '+-' else 'set'] = int(v)
+            print(call('POST', '/api/audio/volume', body)['volume'])
+        else:
+            dev = next(d for d in call('GET', '/api/audio')[kind + 's'] if d['default'])
+            print(f"{dev['volume']}{' (muted)' if dev['muted'] else ''}  {dev['description']}")
+    elif cmd == 'mute':
+        body = {'kind': kind}
+        if args:
+            body['muted'] = args[0] in ('on', '1', 'true', 'yes')
+        call('POST', '/api/audio/mute', body)
+    elif cmd == 'audio':
+        st = call('GET', '/api/audio')
+        if as_json:
+            print(json.dumps(st, indent=2))
+            return
+        for k in ('sinks', 'sources'):
+            print('Outputs:' if k == 'sinks' else 'Inputs:')
+            for d in st[k]:
+                print(f"  {'*' if d['default'] else ' '} {d['volume']:>3}%"
+                      f"{' M' if d['muted'] else '  '} {d['description']}  [{d['name']}]")
+    elif cmd == 'default':
+        call('POST', '/api/audio/default', {'kind': kind, 'name': args[0]})
+
+    elif cmd == 'notify':
+        if not args:
+            die('notify TITLE [BODY]')
+        call('POST', '/api/system/notify',
+             {'title': args[0], 'body': ' '.join(args[1:])})
+    elif cmd in ('shot', 'screenshot'):
+        out = None
+        if '-o' in args:
+            i = args.index('-o')
+            out = args[i + 1]
+            del args[i:i + 2]
+        q = f'?output={args[0]}' if args else ''
+        png = call('GET', '/api/system/screenshot' + q, raw=True)
+        out = out or f'screenshot-{time.strftime("%Y%m%d-%H%M%S")}.png'
+        pathlib.Path(out).write_bytes(png)
+        print(out)
+    elif cmd in ('health', 'info'):
+        print(json.dumps(call('GET', f'/api/{cmd}'), indent=2))
+    else:
+        die(f"unknown command '{cmd}' (pcctl --help; key input is yk)")
+
+
+if __name__ == '__main__':
+    try:
+        main(sys.argv[1:])
+    except (IndexError, StopIteration):
+        die('missing argument (pcctl --help)')
+    except ValueError as e:
+        die(str(e))

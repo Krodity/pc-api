@@ -5,6 +5,8 @@ After=network-online.target tailscaled.service
 Wants=network-online.target
 StartLimitBurst=10
 StartLimitIntervalSec=120
+# Fires only once restarts are exhausted, i.e. it's down for good.
+OnFailure=pc-api-failed.service
 
 [Service]
 Type=simple

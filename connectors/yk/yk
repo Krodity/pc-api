@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# yk — human-readable keys, text and mouse. Same commands as before, but sent to
+# pc-api (:8782) so holds are tracked and expire. If pc-api isn't reachable it
+# falls back to yk-ydotool (the original ydotool version) next to this file.
+# Full guide: ~/Documents/yk-guide.md
+#
+#   yk ctrl+shift+t              combo (press all, release in reverse)
+#   yk -d 40 ctrl+a ctrl+c       several combos, 40 ms between key events
+#   yk hold shift / yk release shift   (holds expire after $YK_HOLD_TTL s, default 120)
+#   yk type 'text'   yk click [left|right|middle|back|forward] [N]
+#   yk move X Y      yk moveto X Y      yk scroll [V] [H]
+#   yk panic         yk list [filter]   yk code NAME
+set -uo pipefail
+
+SELF=$(readlink -f "${BASH_SOURCE[0]}")
+FALLBACK="$(dirname "$SELF")/yk-ydotool"
+API="${PC_API_URL:-http://127.0.0.1:8782}"
+TOKEN_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/pc-api/token"
+CLIENT="${YK_CLIENT:-yk}"
+TTL="${YK_HOLD_TTL:-120}"
+
+usage() { sed -n '2,12p' "$SELF" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+fallback() { exec "$FALLBACK" "$@"; }
+
+ARGS=("$@")
+delay=""
+if [[ ${1:-} == -d ]]; then delay=${2:?yk: -d needs milliseconds}; shift 2; fi
+[[ $# -eq 0 ]] && usage 1
+
+case $1 in
+  -h|--help|help) usage ;;
+  list|code) fallback "${ARGS[@]}" ;;          # local lookups, no input sent
+esac
+
+[[ -r $TOKEN_FILE ]] || fallback "${ARGS[@]}"
+[[ ${YK_BACKEND:-} == ydotool ]] && fallback "${ARGS[@]}"
+
+# POST path json. Falls back only when the request never connected, so an
+# action pc-api already performed is never repeated by ydotool.
+post() {
+  local out code tconn
+  out=$(mktemp) || exit 1
+  read -r code tconn <<< "$(curl -s --connect-timeout 0.5 --max-time 120 \
+      -o "$out" -w '%{http_code} %{time_connect}' \
+      -H "Authorization: Bearer $(<"$TOKEN_FILE")" \
+      -H 'Content-Type: application/json' \
+      --data-binary "$2" "$API$1")"
+  if [[ ${code:-000} == 000 ]]; then
+    rm -f "$out"
+    [[ ${tconn:-0} =~ ^0(\.0+)?$ ]] && fallback "${ARGS[@]}"
+    echo "yk: pc-api did not answer in time (the action may have run)" >&2; exit 1
+  fi
+  if [[ $code != 200 ]]; then
+    echo "yk: $(jq -r '.error // "error"' "$out" 2>/dev/null || cat "$out")" >&2
+    rm -f "$out"; exit 1
+  fi
+  rm -f "$out"
+}
+
+button() {
+  case ${1,,} in
+    left|l|1) echo left ;; right|r|2) echo right ;; middle|m|3) echo middle ;;
+    back|side|4) echo back ;; forward|extra|5) echo forward ;;
+    *) echo "yk: unknown button '$1'" >&2; exit 1 ;;
+  esac
+}
+
+keys_json() { jq -cn '$ARGS.positional' --args "$@"; }
+num() { [[ $1 =~ ^-?[0-9]+$ ]] || { echo "yk: '$1' is not a number" >&2; exit 1; }; echo "$1"; }
+
+case $1 in
+  type)
+    shift
+    post /api/input/type "$(jq -cn --arg t "$(printf '%s' "$@")" \
+        --arg d "${delay:-6}" '{text: $t, delay_ms: ($d|tonumber)}')" ;;
+  hold)
+    shift; [[ $# -gt 0 ]] || { echo "yk: hold what?" >&2; exit 1; }
+    post /api/input/hold "$(jq -cn --argjson k "$(keys_json "$@")" \
+        --arg c "$CLIENT" --arg t "$TTL" '{keys: $k, client: $c, ttl: ($t|tonumber)}')" ;;
+  release)
+    shift
+    post /api/input/release "$(jq -cn --argjson k "$(keys_json "$@")" \
+        --arg c "$CLIENT" 'if ($k|length) > 0 then {keys: $k, client: $c} else {client: $c} end')" ;;
+  click|dclick)
+    cmd=$1; b=$(button "${2:-left}") || exit 1; n=$(num "${3:-1}") || exit 1
+    [[ $cmd == dclick ]] && n=2
+    post /api/input/click "{\"button\":\"$b\",\"count\":$n}" ;;
+  mdown|mup)
+    b=$(button "${2:-left}") || exit 1
+    ep=hold; [[ $1 == mup ]] && ep=release
+    post /api/input/$ep "$(jq -cn --arg k "mouse_$b" --arg c "$CLIENT" \
+        --arg t "$TTL" '{keys: [$k], client: $c, ttl: ($t|tonumber)}')" ;;
+  move)
+    x=$(num "${2:?X}") || exit 1; y=$(num "${3:?Y}") || exit 1
+    post /api/input/move "{\"dx\":$x,\"dy\":$y}" ;;
+  moveto)
+    x=$(num "${2:?X}") || exit 1; y=$(num "${3:?Y}") || exit 1
+    post /api/input/moveto "{\"x\":$x,\"y\":$y}" ;;
+  scroll)
+    v=$(num "${2:--1}") || exit 1; h=$(num "${3:-0}") || exit 1
+    post /api/input/scroll "{\"dy\":$v,\"dx\":$h}" ;;
+  panic)
+    post /api/input/panic '{}' ;;
+  *)
+    post /api/input/key "$(jq -cn --argjson k "$(keys_json "$@")" --arg d "${delay}" \
+        '{keys: $k} + (if $d == "" then {} else {delay_ms: ($d|tonumber), gap_ms: ($d|tonumber)} end)')" ;;
+esac
