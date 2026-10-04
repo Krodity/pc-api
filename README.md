@@ -1,19 +1,73 @@
 # pc-api
 
-One HTTP API for controlling this PC: keyboard/mouse input, Hyprland windows and
-workspaces, media players, audio, notifications and screenshots. The plan is for
-every remote (PC Remote, SSHRemote via `yk`, Deckboard, n8n, Beam, cr-remote) to
-call this instead of carrying its own backend. Those connectors come later.
+One small HTTP API for controlling a Linux desktop: **keyboard and mouse
+input, Hyprland windows and workspaces, media players, audio, notifications
+and screenshots**. Point your phone remotes, stream decks, macro pads or
+automations (n8n, Home Assistant, shortcuts…) at one endpoint instead of each
+one carrying its own backend.
 
-- User service `pc-api.service`, port **8782**, Python stdlib only.
-- Separate from `pc-agent` (PC Remote) on purpose: PC Remote keeps working
-  until it's migrated.
+- Python 3 **standard library only**, no pip installs
+- Input goes through its own **`/dev/uinput`** virtual device, so it works at
+  the kernel level (any compositor, X11 or a bare VT). Per-client **holds
+  with TTLs** mean a remote that drops off Wi-Fi can't leave a key stuck down
+- Runs as a systemd **user** service on port **8782**
+- Only loopback and **Tailscale** peers are let in, plus a bearer token
+
+```bash
+T=$(cat ~/.config/pc-api/token)
+curl -H "Authorization: Bearer $T" -d '{"keys":"ctrl+shift+t"}' localhost:8782/api/input/key
+curl -H "Authorization: Bearer $T" -d '{"text":"hello"}'       localhost:8782/api/input/type
+curl -H "Authorization: Bearer $T" -X POST                      localhost:8782/api/media/play-pause
+curl -H "Authorization: Bearer $T" -d '{"delta":5}'             localhost:8782/api/audio/volume
+```
+
+---
+
+## Requirements
+
+| Feature | Needs |
+|---|---|
+| Server | Linux, systemd, Python 3.10+ |
+| Input routes | Write access to `/dev/uinput` (a `uaccess` udev rule, below) |
+| Hyprland routes | **Hyprland with a Lua config.** Dispatches use the `hl.dsp.*` API through `hyprctl dispatch`. On a classic `hyprland.conf` setup these routes return errors, and everything else still works |
+| Media | `playerctl` (MPRIS) |
+| Audio | `pactl` (PipeWire or PulseAudio) |
+| Notifications | `notify-send` (libnotify) |
+| Screenshots | `grim` (Wayland) |
+| Remote access | [Tailscale](https://tailscale.com/). Without it, only loopback is allowed |
+
+A missing tool only breaks its own routes, which return 502.
+
+## Install
+
+```bash
+git clone https://github.com/Krodity/pc-api.git
+cd pc-api
+./install.sh
+```
+
+The installer writes `~/.config/systemd/user/pc-api.service` pointing at your
+clone, enables and starts it, and warns about any missing tools or
+`/dev/uinput` access. On first start the server creates a random token in
+`~/.config/pc-api/token` (mode 0600).
+
+uinput access, if the installer warned about it:
+
+```bash
+echo 'KERNEL=="uinput", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/50-uinput.rules
+sudo udevadm control --reload && sudo udevadm trigger     # then log out and back in
+```
+
+Day to day:
 
 ```bash
 systemctl --user {status,restart} pc-api
 journalctl --user -u pc-api -f
 python3 -m unittest discover -s tests      # no /dev/uinput needed
 ```
+
+Settings (environment variables, set with `systemctl --user edit pc-api`):
+`PC_API_PORT` (8782), `PC_API_LOG` (INFO), `XDG_CONFIG_HOME` (where `pc-api/token` lives).
 
 ## Access
 
@@ -55,8 +109,8 @@ All POST bodies are JSON. `client` is optional everywhere and only matters for h
 | `POST /api/input/scroll` | `{dy?, dx?}` | `dy > 0` scrolls up. |
 | `GET /api/input/keys?filter=vol` | | Searchable list of key names. |
 
-**Key names** are the same set `yk` accepts: yk's aliases (`lctrl`, `volup`,
-`next`, `bs`, `backtick`…), PC Remote's names, any kernel `KEY_*` symbol
+**Key names**: friendly aliases (`lctrl`, `volup`, `next`, `bs`, `backtick`…),
+names like `enter`, `super`, `playpause`, any kernel `KEY_*` symbol
 lowercased without the prefix (`f24`, `kpenter`), `btn_*` symbols, and raw
 codes (`30`, `0x1e`). Mouse buttons can also be held as `mouse_left` etc.
 Joystick/gamepad buttons are rejected because the virtual device doesn't
@@ -75,8 +129,8 @@ declare them (declaring them makes libinput treat it as a joystick).
 | `POST /api/hypr/launch` | `{cmd: "[workspace 2] obs"}` |
 | `POST /api/hypr/dispatch` | `{lua: 'hl.dsp.global("quickshell:overviewWorkspacesToggle")'}` |
 
-The live Hyprland instance is re-resolved on every call (like `~/bin/hypr-live`),
-so a Hyprland restart doesn't leave the service stale.
+The live Hyprland instance is looked up again on every call, so restarting
+Hyprland doesn't leave the service talking to a dead socket.
 
 ### Media (playerctl / MPRIS)
 
@@ -97,8 +151,21 @@ so a Hyprland restart doesn't leave the service stale.
 
 ## Not here yet
 
-- **Lock screen.** The live `base` shell has no lock IPC, and `loginctl lock-session`
-  doesn't lock on this box.
-- **Connectors.** `yk` → this API (with a ydotool fallback), then PC Remote, Deckboard and n8n.
-- Window close/move/fullscreen weren't live-tested; focus, workspace state,
-  dispatch errors and `moveto` were.
+- **Lock screen**: there's no reliable cross-shell lock IPC yet.
+- **Client connectors**: wrappers so existing tools (a ydotool-style CLI,
+  phone remotes, stream decks, n8n) call this API.
+- Window close/move/fullscreen haven't been live-tested. Focus, workspace
+  state, dispatch errors and `moveto` have.
+
+## Security
+
+The token is effectively **remote control of your desktop**:
+`/api/hypr/launch` and `/api/hypr/dispatch` can start any program, and the
+input routes can type anything. Treat it like an SSH key. The peer filter
+works on its own, without a firewall, but the server listens on all
+interfaces (`::`), so keep the filter's address list (`pcapi/server.py`)
+limited to networks you trust.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

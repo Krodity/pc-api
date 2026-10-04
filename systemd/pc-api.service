@@ -10,6 +10,7 @@ StartLimitIntervalSec=120
 Type=simple
 # User service on purpose: it injects input into this user's session and
 # talks to this user's Hyprland, PipeWire and D-Bus.
+# install.sh fills in %REPO%. Port: Environment=PC_API_PORT=8782
 ExecStart=/usr/bin/python3 %REPO%/pc_api.py
 Restart=on-failure
 RestartSec=3
