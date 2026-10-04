@@ -188,6 +188,44 @@ which break when more than one instance directory exists.
 Non-interactive SSH sessions often don't have `~/.local/bin` on `PATH`; link
 the commands into `/usr/local/bin` if a remote can't find them.
 
+### Deckboard
+
+`connectors/deckboard/migrate.py` rewrites Deckboard's button database so its
+buttons go through pc-api: `hypr-live '<lua>'` → `pcctl dispatch '<lua>'`,
+`wtype` keys → `yk`, `playerctl`/`wpctl` → `pcctl`, and `key`-type buttons
+(X11 injection, which does nothing on Wayland) → `yk`. Anything else is left
+alone. A dry run is the default. `--apply` refuses to run while Deckboard is up
+(it holds the DB open) and backs the DB up first.
+
+```bash
+connectors/deckboard/migrate.py                 # show old -> new
+systemctl --user stop deckboard && connectors/deckboard/migrate.py --apply && systemctl --user start deckboard
+```
+
+Deckboard runs commands with no `HOME` or `PATH`, so buttons use absolute paths
+(`~/.local/bin/yk`, `~/.local/bin/pcctl`, written out in full) and `yk` fills in
+`HOME`/`PATH` itself.
+
+### n8n
+
+`connectors/n8n/install.sh` imports:
+
+- credential **`pc-api`** (Header Auth, `Authorization: Bearer <token>`). Use it
+  from any HTTP Request node pointed at `http://127.0.0.1:8782/api/...`.
+- workflow **`pc-api: call`**, a published sub-workflow. Call it with an
+  Execute Workflow node. Each input item is `{method, path, body}`, and it
+  returns pc-api's `{ok, result}`.
+- workflow **`pc-api: example`**: Manual Trigger → Set → `pc-api: call`, which
+  sends a desktop notification.
+
+```bash
+N8N="n8n" PROJECT_ID=<your project id> connectors/n8n/install.sh
+```
+
+`N8N` must run the same n8n (and Node) as the server. Re-running updates
+everything in place (fixed IDs). The token only exists in a 0600 temp file during
+the import and is stored encrypted by n8n.
+
 ## Down alert
 
 `pc-api-failed.service` runs when systemd gives up restarting pc-api. It does
@@ -197,8 +235,8 @@ it posts a high-priority ntfy message there.
 ## Not here yet
 
 - **Lock screen**: there's no reliable cross-shell lock IPC yet.
-- **More connectors**: phone remotes that keep their own backend today,
-  stream decks, n8n.
+- **More connectors**: phone remotes that keep their own backend today
+  (PC Remote, Beam, cr-remote).
 - Window close/move/fullscreen haven't been live-tested. Focus, workspace
   state, dispatch errors and `moveto` have.
 

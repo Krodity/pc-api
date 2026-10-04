@@ -1,0 +1,69 @@
+[
+  {
+    "id": "pcApiCallSub01",
+    "name": "pc-api: call",
+    "active": false,
+    "nodes": [
+      {
+        "parameters": {
+          "inputSource": "passthrough"
+        },
+        "id": "pcapi-trigger",
+        "name": "When called by another workflow",
+        "type": "n8n-nodes-base.executeWorkflowTrigger",
+        "typeVersion": 1.1,
+        "position": [
+          220,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "method": "={{ ($json.method || 'GET').toUpperCase() }}",
+          "url": "=http://127.0.0.1:8782{{ $json.path }}",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendBody": true,
+          "contentType": "json",
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify($json.body || {}) }}",
+          "options": {}
+        },
+        "id": "pcapi-http",
+        "name": "pc-api request",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          460,
+          300
+        ],
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "pcApiBearer01",
+            "name": "pc-api"
+          }
+        }
+      }
+    ],
+    "connections": {
+      "When called by another workflow": {
+        "main": [
+          [
+            {
+              "node": "pc-api request",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1"
+    },
+    "pinData": {},
+    "meta": {
+      "description": "Call pc-api. Each input item: {method: 'GET'|'POST', path: '/api/...', body: {...}}. Returns pc-api's JSON ({ok, result})."
+    }
+  }
+]
