@@ -1,0 +1,18 @@
+[Unit]
+Description=pc-api — HTTP API for controlling this PC (input, windows, media, audio)
+Documentation=https://github.com/Krodity/pc-api
+After=network-online.target tailscaled.service
+Wants=network-online.target
+StartLimitBurst=10
+StartLimitIntervalSec=120
+
+[Service]
+Type=simple
+# User service on purpose: it injects input into this user's session and
+# talks to this user's Hyprland, PipeWire and D-Bus.
+ExecStart=/usr/bin/python3 %REPO%/pc_api.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
