@@ -2,7 +2,7 @@
 # yk — human-readable keys, text and mouse. Same commands as before, but sent to
 # pc-api (:8782) so holds are tracked and expire. If pc-api isn't reachable it
 # falls back to yk-ydotool (the original ydotool version) next to this file.
-# Full guide: ~/Documents/yk-guide.md
+# Guide: README.md (Connectors → yk) in the pc-api repo
 #
 #   yk ctrl+shift+t              combo (press all, release in reverse)
 #   yk -d 40 ctrl+a ctrl+c       several combos, 40 ms between key events

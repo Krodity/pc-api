@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # yk — human-readable front end for ydotool (keys, text, mouse).
 # Needs ydotool.service (user) on the default socket; yk starts it if it's down.
-# Full guide: ~/Documents/yk-guide.md
+# Guide: README.md (Connectors → yk) in the pc-api repo
 #
 #   yk ctrl+shift+t              combo (press all, release in reverse)
 #   yk -d 40 ctrl+a ctrl+c       several combos, 40 ms between key events
